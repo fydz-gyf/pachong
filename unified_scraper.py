@@ -175,6 +175,24 @@ def _command_interpreter(value: str | Path | None = None) -> Path:
     return Path(found) if found else Path("cmd.exe")
 
 
+def _walmart_python(project_dir: Path) -> Path:
+    """Prefer Walmart's local venv, falling back to this launcher's Python.
+
+    The repository intentionally excludes virtual environments, so a clean checkout
+    must still be able to preflight and launch Walmart when the root launcher Python
+    has the shared dependencies installed.
+    """
+
+    venv_candidates = (
+        project_dir / ".venv" / "Scripts" / "python.exe",
+        project_dir / ".venv" / "bin" / "python",
+    )
+    for candidate in venv_candidates:
+        if candidate.is_file():
+            return candidate
+    return Path(sys.executable)
+
+
 def build_launch_plan(
     platform: str,
     paths: ProjectPaths | None = None,
@@ -197,7 +215,7 @@ def build_launch_plan(
     elif normalized == "walmart":
         project_dir = project_paths.walmart
         entrypoint = project_dir / "run.py"
-        runtime = project_dir / ".venv" / "Scripts" / "python.exe"
+        runtime = _walmart_python(project_dir)
         # 与 Walmart 现有 BAT 保持一致，使用 AdsPower 浏览器身份并保留其
         # run.py 内置的交互式关键词/页数输入。
         command = (str(runtime), str(entrypoint), "--browser", "adspower")

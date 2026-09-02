@@ -199,6 +199,199 @@ class CDPAuthProvider:
         finally:
             client.close()
 
+    def fetch_sorftime_html(self, url: str, expected_count: int = 0, timeout: int | None = None) -> dict:
+        """Load a Walmart search page and wait for Sorftime extension boards.
+
+        The extension runs only in the visible AdsPower/Chromium profile, so standalone
+        HTTP responses cannot contain its injected metrics. This method reuses the
+        already-open Walmart tab, waits for Sorftime card boards, performs a gentle
+        scroll sweep when necessary, and returns the final rendered HTML. It does not
+        interact with human-verification controls.
+        """
+        timeout = int(timeout or getattr(self.settings, "sorftime_wait_timeout", 18))
+        timeout = max(5, timeout)
+        target = self._pick_walmart_tab()
+        ws_url = target.get("webSocketDebuggerUrl")
+        if not ws_url:
+            raise RuntimeError("Selected browser tab has no debugger WebSocket URL")
+
+        client = CDPClient(ws_url)
+        started = time.perf_counter()
+        last_ready = ""
+        board_count = 0
+        stable_polls = 0
+        last_count = -1
+        try:
+            client.call("Page.enable")
+            client.call("Runtime.enable")
+            client.call("Page.navigate", {"url": url}, timeout=min(15, timeout))
+
+            ready_deadline = time.monotonic() + min(timeout, 15)
+            while time.monotonic() < ready_deadline:
+                try:
+                    last_ready = str(self._runtime_value(client, "document.readyState", timeout=5) or "")
+                    if last_ready in {"interactive", "complete"}:
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.30)
+
+            # Sorftime usually injects all boards without scrolling, but Walmart can lazily
+            # mount product cards. Poll first, then gradually scroll if coverage is low.
+            deadline = time.monotonic() + timeout
+            polls = 0
+            while time.monotonic() < deadline:
+                polls += 1
+                try:
+                    board_count = int(self._runtime_value(
+                        client,
+                        "document.querySelectorAll('[data-sorftime-board=\"1\"], [id^=\"sorftime_asinBoard_\"]').length",
+                        timeout=5,
+                    ) or 0)
+                except Exception:
+                    board_count = 0
+
+                if board_count == last_count and board_count > 0:
+                    stable_polls += 1
+                else:
+                    stable_polls = 0
+                last_count = board_count
+
+                if expected_count > 0 and board_count >= expected_count:
+                    # One extra beat lets the text values settle after the board shells appear.
+                    time.sleep(0.6)
+                    break
+                minimum_good = max(1, int(expected_count * 0.85)) if expected_count > 0 else 1
+                if board_count >= minimum_good and stable_polls >= 4:
+                    break
+
+                # After the first few polls, advance through the page to trigger lazy cards.
+                at_bottom = False
+                if polls >= 4:
+                    try:
+                        scroll_state = self._runtime_value(
+                            client,
+                            "(() => { const h=Math.max(document.body?.scrollHeight||0, document.documentElement?.scrollHeight||0); const vh=window.innerHeight||800; const step=Math.max(700, Math.floor(vh*0.85)); const y=Math.min(h, (window.scrollY||0)+step); window.scrollTo(0,y); return {y:window.scrollY||y,h,vh}; })()",
+                            timeout=5,
+                        ) or {}
+                        if isinstance(scroll_state, dict):
+                            y = float(scroll_state.get("y") or 0)
+                            h = float(scroll_state.get("h") or 0)
+                            vh = float(scroll_state.get("vh") or 0)
+                            at_bottom = h > 0 and y + vh >= h - 40
+                    except Exception:
+                        pass
+                if at_bottom and board_count > 0 and stable_polls >= 2:
+                    break
+                time.sleep(0.45)
+
+            html = str(self._runtime_value(
+                client,
+                "document.documentElement ? document.documentElement.outerHTML : ''",
+                timeout=min(15, timeout),
+            ) or "")
+            current_url = str(self._runtime_value(client, "location.href", timeout=5) or url)
+            title = str(self._runtime_value(client, "document.title", timeout=5) or extract_title(html))
+            try:
+                self._runtime_value(client, "window.scrollTo(0,0); true", timeout=3)
+            except Exception:
+                pass
+            return {
+                "url": current_url,
+                "title": title,
+                "html": html,
+                "elapsed": time.perf_counter() - started,
+                "ready_state": last_ready,
+                "target_id": target.get("id", ""),
+                "sorftime_board_count": board_count,
+            }
+        finally:
+            client.close()
+
+    def read_extension_storage(self, extension_id: str, key: str):
+        """Read one chrome.storage.local value from an installed extension.
+
+        MV3 service workers are ephemeral, so a live extension target may not exist.
+        When necessary we temporarily open the extension popup through the browser-level
+        CDP Target domain, evaluate chrome.storage.local there, then close the target.
+        """
+        extension_id = str(extension_id or "").strip()
+        key = str(key or "").strip()
+        if not extension_id or not key:
+            raise ValueError("extension_id and key are required")
+
+        prefix = f"chrome-extension://{extension_id}/"
+
+        def try_target(target: dict):
+            ws_url = target.get("webSocketDebuggerUrl")
+            if not ws_url:
+                return None
+            client = CDPClient(ws_url)
+            try:
+                client.call("Runtime.enable")
+                expression = (
+                    "new Promise((resolve) => {"
+                    "try { chrome.storage.local.get([" + json.dumps(key) + "], "
+                    "(r) => resolve((r && r[" + json.dumps(key) + "]) || '')); } "
+                    "catch (e) { resolve(''); }"
+                    "})"
+                )
+                return self._runtime_value(client, expression, timeout=10)
+            finally:
+                client.close()
+
+        # Prefer an already-live extension page/service worker/background target.
+        for target in self._tabs():
+            if str(target.get("url") or "").startswith(prefix):
+                try:
+                    value = try_target(target)
+                    if value not in (None, ""):
+                        return value
+                except Exception:
+                    pass
+
+        browser_ws = self._version().get("webSocketDebuggerUrl")
+        if not browser_ws:
+            raise RuntimeError("Chrome CDP has no browser WebSocket URL")
+        browser = CDPClient(browser_ws)
+        target_id = ""
+        try:
+            # Sorftime MV3 declares popup.html. A temporary popup target gives us an
+            # extension origin where chrome.storage.local is available.
+            created = browser.call(
+                "Target.createTarget",
+                {"url": prefix + "popup.html", "background": True},
+                timeout=10,
+            )
+            target_id = str(created.get("targetId") or "")
+            deadline = time.monotonic() + 8
+            last_error = None
+            while time.monotonic() < deadline:
+                try:
+                    for target in self._tabs():
+                        if target_id and str(target.get("id") or target.get("targetId") or "") != target_id:
+                            continue
+                        if not str(target.get("url") or "").startswith(prefix):
+                            continue
+                        value = try_target(target)
+                        if value not in (None, ""):
+                            return value
+                except Exception as e:
+                    last_error = e
+                time.sleep(0.25)
+            if last_error:
+                raise RuntimeError(f"Extension storage read failed: {last_error}")
+            raise RuntimeError(
+                f"Extension {extension_id} storage key {key!r} was empty or unavailable"
+            )
+        finally:
+            if target_id:
+                try:
+                    browser.call("Target.closeTarget", {"targetId": target_id}, timeout=5)
+                except Exception:
+                    pass
+            browser.close()
+
     def save_state(self) -> dict:
         state = {
             "saved_at": datetime.now().isoformat(timespec="seconds"),

@@ -4,7 +4,7 @@ chcp 65001 >nul
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 
-title Walmart Scraper
+title Walmart Scraper V9 HTTP
 
 cd /d "%~dp0"
 
@@ -31,17 +31,19 @@ if not exist "%RUNNER%" (
 
 cls
 echo ==========================================================================================
-echo Walmart HTTP Scraper
+echo Walmart HTTP Scraper V9 - Sorftime HTTP Direct
 echo ==========================================================================================
 echo.
 echo 1. Open the Walmart profile in AdsPower first.
-echo 2. Keep a working walmart.com tab open in that browser.
-echo 3. Then answer the interactive questions below.
+echo 2. Keep a working walmart.com tab open.
+echo 3. Make sure the Sorftime extension is enabled and logged in.
+echo 4. V9 reads Sorftime auth once, then fetches estimates by HTTP.
+echo 5. Keeping AdsPower open is recommended for Walmart verification fallback.
 echo.
 echo ==========================================================================================
 echo.
 
-"%PYTHON%" "%RUNNER%" --browser adspower
+"%PYTHON%" "%RUNNER%" --browser adspower --sorftime-mode http
 set "EXITCODE=%ERRORLEVEL%"
 
 echo.

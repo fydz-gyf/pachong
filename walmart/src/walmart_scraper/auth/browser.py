@@ -157,6 +157,24 @@ class BrowserAuthProvider:
             )
         return self._cdp.fetch_html_in_browser(url, timeout=self.settings.request_timeout)
 
+    def fetch_sorftime_html_in_browser(self, url: str, expected_count: int = 0) -> dict:
+        if not self.available():
+            raise RuntimeError(
+                f"Cannot connect to browser CDP at {self.settings.cdp_host}:{self.settings.cdp_port}"
+            )
+        return self._cdp.fetch_sorftime_html(
+            url,
+            expected_count=max(0, int(expected_count or 0)),
+            timeout=self.settings.sorftime_wait_timeout,
+        )
+
+    def read_extension_storage(self, extension_id: str, key: str):
+        if not self.available():
+            raise RuntimeError(
+                f"Cannot connect to browser CDP at {self.settings.cdp_host}:{self.settings.cdp_port}"
+            )
+        return self._cdp.read_extension_storage(extension_id, key)
+
     def save_state(self) -> dict:
         if not self._cdp.available():
             wants_ads = (

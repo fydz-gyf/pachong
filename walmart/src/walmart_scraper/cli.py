@@ -85,6 +85,9 @@ def apply_interactive_defaults(args):
             20,
         )
 
+    sorftime_answer = input("是否抓取 Sorftime 产品预计月销量/预计月销售额 [Y/n]: ").strip().lower()
+    args.no_sorftime = sorftime_answer in {"n", "no", "0"}
+
     print()
     print("本次任务：")
     print("  关键词：" + " | ".join(args.keywords))
@@ -92,6 +95,15 @@ def apply_interactive_defaults(args):
     print("  商品主图：" + ("嵌入 Excel" if not args.no_images else "不嵌入"))
     if not args.no_images:
         print(f"  图片下载并发：{args.image_workers}")
+    print(
+        "  Sorftime数据："
+        + (
+            ("HTTP直连" if args.sorftime_mode == "http" else "浏览器DOM")
+            + "抓取预计月销量/预计月销售额"
+            if not args.no_sorftime
+            else "不抓取"
+        )
+    )
     print("  浏览器身份：自动检测（优先复用已打开的 AdsPower/Walmart 配置）")
     print("=" * 90)
     print()
@@ -108,6 +120,14 @@ def build_parser():
     p.add_argument("--proxy", default="")
     p.add_argument("--no-images", action="store_true")
     p.add_argument("--image-workers", type=int, default=5)
+    p.add_argument("--no-sorftime", action="store_true",
+                   help="disable Sorftime estimated monthly sales/revenue enrichment")
+    p.add_argument("--sorftime-mode", choices=["http", "browser"], default="http",
+                   help="Sorftime enrichment mode; V9 defaults to direct HTTP")
+    p.add_argument("--no-sorftime-browser-fallback", action="store_true",
+                   help="do not fall back to Sorftime's rendered browser cards when HTTP fails")
+    p.add_argument("--sorftime-timeout", type=int, default=18,
+                   help="browser fallback wait seconds when Sorftime HTTP is unavailable")
     p.add_argument("--filter-sponsored", action="store_true")
     p.add_argument("--force-refresh", action="store_true")
     p.add_argument("--no-resume", action="store_true")
@@ -160,6 +180,10 @@ def main(argv=None):
         keywords=[x.strip() for x in (args.keywords or ["office chair"]) if x.strip()],
         max_pages=max(1, args.pages), proxy_url=args.proxy.strip(), embed_images=not args.no_images,
         image_workers=max(1, min(20, args.image_workers)), filter_sponsored=args.filter_sponsored,
+        sorftime_enabled=not args.no_sorftime,
+        sorftime_mode=args.sorftime_mode,
+        sorftime_browser_fallback=not args.no_sorftime_browser_fallback,
+        sorftime_wait_timeout=max(5, min(60, args.sorftime_timeout)),
         force_refresh=args.force_refresh, resume=not args.no_resume, save_html=args.save_html, save_next_data=args.save_next_data,
         browser_mode=args.browser, cdp_port=max(1, args.cdp_port),
         browser_page_fallback=not args.no_browser_page_fallback,
@@ -178,6 +202,12 @@ def main(argv=None):
     logging.info("Browser auth source: %s", client.browser.resolved_mode)
     if settings.browser_mode == "adspower" and not settings.proxy_url:
         logging.info("AdsPower profile has no reusable proxy configuration; HTTP will use the current machine network.")
+    if settings.sorftime_enabled:
+        logging.info(
+            "Sorftime mode: %s%s",
+            settings.sorftime_mode,
+            " (browser fallback enabled)" if settings.sorftime_browser_fallback and settings.sorftime_mode == "http" else "",
+        )
     all_results = {}
     incomplete = []
     for keyword in settings.keywords:
@@ -193,5 +223,27 @@ def main(argv=None):
             all_results[keyword] = rows; incomplete.append(keyword)
     output = exporter.export(all_results, client.environment)
     print(f"\n完成: {output}")
-    if incomplete: print("未完整抓取: " + " | ".join(incomplete))
+    if incomplete:
+        print("未完整抓取: " + " | ".join(incomplete))
+    if settings.sorftime_enabled:
+        sorftime_incomplete = []
+        for keyword, rows in all_results.items():
+            total = len(rows)
+            matched = sum(1 for r in rows if r.get("sorftime_checked"))
+            estimates = sum(
+                1 for r in rows
+                if r.get("sorftime_month_sales") not in ("", None)
+                or r.get("sorftime_month_revenue") not in ("", None)
+            )
+            logging.info(
+                "[%s] Sorftime final coverage: matched=%s/%s estimates available=%s",
+                keyword,
+                matched,
+                total,
+                estimates,
+            )
+            if matched < total:
+                sorftime_incomplete.append(keyword)
+        if sorftime_incomplete:
+            print("Sorftime数据未完整: " + " | ".join(sorftime_incomplete))
     return 0

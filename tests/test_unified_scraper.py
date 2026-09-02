@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import unified_scraper
 
@@ -76,18 +77,22 @@ class UnifiedScraperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("DRY-RUN", result.stdout)
 
-    def make_projects(self) -> unified_scraper.ProjectPaths:
+    def make_projects(self, *, walmart_venv: bool = True) -> unified_scraper.ProjectPaths:
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
         taobao = root / "淘宝 项目"
         walmart = root / "Walmart 项目"
         wayfair = root / "Wayfair 项目"
         (taobao).mkdir()
-        (walmart / ".venv" / "Scripts").mkdir(parents=True)
+        if walmart_venv:
+            (walmart / ".venv" / "Scripts").mkdir(parents=True)
+        else:
+            walmart.mkdir()
         (wayfair).mkdir()
         (taobao / "taobao_scraper.py").write_text("# test\n", encoding="utf-8")
         (walmart / "run.py").write_text("# test\n", encoding="utf-8")
-        (walmart / ".venv" / "Scripts" / "python.exe").write_bytes(b"")
+        if walmart_venv:
+            (walmart / ".venv" / "Scripts" / "python.exe").write_bytes(b"")
         (wayfair / "启动Wayfair类目采集.bat").write_text("@echo off\n", encoding="utf-8")
         return unified_scraper.ProjectPaths(taobao, walmart, wayfair)
 
@@ -144,6 +149,11 @@ class UnifiedScraperTests(unittest.TestCase):
         self.assertEqual(walmart.cwd, paths.walmart)
         self.assertEqual(walmart.command[-2:], ("--browser", "adspower"))
         self.assertEqual(walmart.command[1], str(paths.walmart / "run.py"))
+        self.assertEqual(
+            walmart.runtime_executable,
+            paths.walmart / ".venv" / "Scripts" / "python.exe",
+        )
+        self.assertEqual(walmart.command[0], str(walmart.runtime_executable))
 
         wayfair = unified_scraper.build_launch_plan(
             "wayfair", paths, command_interpreter=cmd
@@ -178,6 +188,18 @@ class UnifiedScraperTests(unittest.TestCase):
         )
         self.assertEqual(exit_code, 0)
         self.assertTrue(any("DRY-RUN" in item for item in output))
+
+    def test_walmart_falls_back_to_launcher_python_without_local_venv(self) -> None:
+        paths = self.make_projects(walmart_venv=False)
+        launcher_python = Path(self.temp_dir.name) / "launcher python.exe"
+        launcher_python.write_bytes(b"")
+
+        with patch.object(unified_scraper.sys, "executable", str(launcher_python)):
+            plan = unified_scraper.build_launch_plan("walmart", paths)
+
+        self.assertEqual(plan.runtime_executable, launcher_python)
+        self.assertEqual(plan.command[0], str(launcher_python))
+        unified_scraper.preflight(plan)
 
     def test_dry_run_for_all_platforms_does_not_crawl_or_spawn(self) -> None:
         paths = self.make_projects()

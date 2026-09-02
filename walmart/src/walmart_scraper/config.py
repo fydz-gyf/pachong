@@ -42,6 +42,16 @@ class Settings:
     image_max_size: int = 120
     image_jpeg_quality: int = 80
     keep_image_cache: bool = False
+    # Sorftime enrichment. HTTP mode reads the logged-in extension token once from
+    # AdsPower, then calls Sorftime directly without loading/scrolling every page.
+    sorftime_enabled: bool = True
+    sorftime_mode: str = "http"  # http | browser
+    sorftime_browser_fallback: bool = True
+    sorftime_wait_timeout: int = 18
+    sorftime_nmversion: int = 110
+    sorftime_extension_id: str = "aadiiicebnjmjmibjengdohedcfeekeg"
+    # Prefer SORFTIME_TOKEN env var over putting credentials in config/code.
+    sorftime_token: str = ""
     request_timeout: int = 45
     max_request_retries: int = 4
     request_delay_min: float = 2.5
