@@ -48,6 +48,17 @@ pip-wheel-metadata/
 **/session/
 **/sessions/
 
+# Reddit input is local operator data; only the two safe sample files are tracked.
+reddit/input/*
+!reddit/input/keywords.txt
+!reddit/input/urls.txt
+
+# Timestamped/renamed backups produced by local patching or recovery scripts.
+**/*.bak*
+**/*.broken*
+**/*backup*/
+**/backups/
+
 # Authentication material and local exports
 cookies.txt
 cookies*.txt

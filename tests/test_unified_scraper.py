@@ -53,6 +53,15 @@ class UnifiedScraperTests(unittest.TestCase):
         self.assertNotIn(r"E:\wayfair-local-scraper", text)
         self.assertNotIn(r"E:\wayfair-image-embedder", text)
 
+    def test_reddit_batch_uses_relative_runtime_fallbacks(self) -> None:
+        batch_path = REPO_ROOT / "reddit" / "start.bat"
+        text = batch_path.read_text(encoding="ascii")
+        self.assertIn('set "REDDIT_DIR=%~dp0"', text)
+        self.assertIn('set "REPO_ROOT=%~dp0..\\"', text)
+        self.assertIn("where python", text)
+        self.assertIn("where py", text)
+        self.assertNotIn(r"E:\reddit-scraper", text)
+
     @unittest.skipUnless(os.name == "nt", "the BAT parser is only available on Windows")
     def test_unified_batch_dry_run_does_not_start_scraper(self) -> None:
         batch_path = REPO_ROOT / "start_scraper.bat"
@@ -83,18 +92,21 @@ class UnifiedScraperTests(unittest.TestCase):
         taobao = root / "淘宝 项目"
         walmart = root / "Walmart 项目"
         wayfair = root / "Wayfair 项目"
+        reddit = root / "Reddit 项目"
         (taobao).mkdir()
         if walmart_venv:
             (walmart / ".venv" / "Scripts").mkdir(parents=True)
         else:
             walmart.mkdir()
         (wayfair).mkdir()
+        (reddit).mkdir()
         (taobao / "taobao_scraper.py").write_text("# test\n", encoding="utf-8")
         (walmart / "run.py").write_text("# test\n", encoding="utf-8")
         if walmart_venv:
             (walmart / ".venv" / "Scripts" / "python.exe").write_bytes(b"")
         (wayfair / "启动Wayfair类目采集.bat").write_text("@echo off\n", encoding="utf-8")
-        return unified_scraper.ProjectPaths(taobao, walmart, wayfair)
+        (reddit / "app.py").write_text("# test\n", encoding="utf-8")
+        return unified_scraper.ProjectPaths(taobao, walmart, wayfair, reddit)
 
     def tearDown(self) -> None:
         temporary = getattr(self, "temp_dir", None)
@@ -105,6 +117,8 @@ class UnifiedScraperTests(unittest.TestCase):
         self.assertEqual(unified_scraper.normalize_platform("淘宝"), "taobao")
         self.assertEqual(unified_scraper.normalize_platform("2"), "walmart")
         self.assertEqual(unified_scraper.normalize_platform("WAYFAIR"), "wayfair")
+        self.assertEqual(unified_scraper.normalize_platform("4"), "reddit")
+        self.assertEqual(unified_scraper.normalize_platform("RD"), "reddit")
         self.assertIsNone(unified_scraper.normalize_platform("0"))
         with self.assertRaises(ValueError):
             unified_scraper.normalize_platform("amazon")
@@ -117,6 +131,13 @@ class UnifiedScraperTests(unittest.TestCase):
         self.assertEqual(paths.taobao, (REPO_ROOT / "taobao").resolve())
         self.assertEqual(paths.walmart, (REPO_ROOT / "walmart").resolve())
         self.assertEqual(paths.wayfair, (REPO_ROOT / "wayfair").resolve())
+        self.assertEqual(paths.reddit, (REPO_ROOT / "reddit").resolve())
+
+        overridden = unified_scraper.load_project_paths(
+            launcher_dir=REPO_ROOT,
+            environ={"REDDIT_SCRAPER_DIR": "D:/reddit-local"},
+        )
+        self.assertEqual(overridden.reddit, Path("D:/reddit-local").resolve())
 
     def test_menu_retries_invalid_choice_and_can_exit(self) -> None:
         output: list[str] = []
@@ -124,6 +145,13 @@ class UnifiedScraperTests(unittest.TestCase):
         selected = unified_scraper.choose_platform(lambda _prompt: next(answers), output.append)
         self.assertEqual(selected, "wayfair")
         self.assertTrue(any("不支持的平台" in item for item in output))
+
+        output.clear()
+        self.assertEqual(
+            unified_scraper.choose_platform(lambda _prompt: "4", output.append),
+            "reddit",
+        )
+        self.assertTrue(any("4. Reddit" in item for item in output))
 
         self.assertIsNone(
             unified_scraper.choose_platform(lambda _prompt: "0", output.append)
@@ -163,6 +191,26 @@ class UnifiedScraperTests(unittest.TestCase):
         self.assertEqual(wayfair.command[1:3], ("/d", "/c"))
         self.assertIn(str(paths.wayfair / "启动Wayfair类目采集.bat"), wayfair.command[3])
 
+        reddit = unified_scraper.build_launch_plan(
+            "reddit", paths, reddit_python_executable=python
+        )
+        self.assertEqual(reddit.cwd, paths.reddit)
+        self.assertEqual(reddit.entrypoint, paths.reddit / "app.py")
+        self.assertEqual(
+            reddit.command,
+            (str(python), str(paths.reddit / "app.py")),
+        )
+        self.assertEqual(reddit.runtime_executable, python)
+
+        fallback = Path(self.temp_dir.name) / "reddit fallback.exe"
+        with patch.object(unified_scraper, "_reddit_python", return_value=fallback) as chooser:
+            isolated = unified_scraper.build_launch_plan(
+                "reddit", paths, python_executable=python
+            )
+        chooser.assert_called_once_with(paths.reddit)
+        self.assertEqual(isolated.runtime_executable, fallback)
+        self.assertNotEqual(isolated.runtime_executable, python)
+
     def test_preflight_and_dry_run_do_not_start_a_child(self) -> None:
         paths = self.make_projects()
         fake_python = Path(self.temp_dir.name) / "python.exe"
@@ -201,6 +249,32 @@ class UnifiedScraperTests(unittest.TestCase):
         self.assertEqual(plan.command[0], str(launcher_python))
         unified_scraper.preflight(plan)
 
+    def test_reddit_runtime_prefers_local_root_then_current_python(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "reddit"
+            project.mkdir()
+            local = project / ".venv" / "Scripts" / "python.exe"
+            local.parent.mkdir(parents=True)
+            local.write_bytes(b"")
+            self.assertEqual(unified_scraper._reddit_python(project, root), local)
+
+            local.unlink()
+            repo_python = root / "repo" / ".venv" / "Scripts" / "python.exe"
+            repo_python.parent.mkdir(parents=True)
+            repo_python.write_bytes(b"")
+            self.assertEqual(
+                unified_scraper._reddit_python(project, root / "repo"), repo_python
+            )
+
+            repo_python.unlink()
+            fallback = root / "launcher python.exe"
+            fallback.write_bytes(b"")
+            with patch.object(unified_scraper.sys, "executable", str(fallback)):
+                self.assertEqual(
+                    unified_scraper._reddit_python(project, root / "repo"), fallback
+                )
+
     def test_dry_run_for_all_platforms_does_not_crawl_or_spawn(self) -> None:
         paths = self.make_projects()
         fake_python = Path(self.temp_dir.name) / "python.exe"
@@ -223,6 +297,13 @@ class UnifiedScraperTests(unittest.TestCase):
                 paths.wayfair,
                 "--cmd-exe",
                 fake_cmd,
+            ),
+            (
+                "reddit",
+                "--reddit-dir",
+                paths.reddit,
+                "--reddit-python",
+                fake_python,
             ),
         )
         for case in cases:

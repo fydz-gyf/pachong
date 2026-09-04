@@ -31,6 +31,7 @@ if not exist "%ROOT%unified_scraper.py" (
 )
 
 echo Starting the unified scraper launcher...
+echo Supported platforms: Taobao, Walmart, Wayfair, Reddit
 echo Repository: %ROOT%
 echo.
 

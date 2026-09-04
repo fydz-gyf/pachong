@@ -1,3 +1,4 @@
+# Shared dependencies for Taobao, Walmart, Wayfair, and Reddit.
 curl_cffi>=0.13.0
 requests>=2.32.0
 websocket-client>=1.8.0

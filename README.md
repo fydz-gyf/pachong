@@ -1,6 +1,6 @@
-# 三平台统一电商爬虫
+# 四平台统一爬虫
 
-本仓库把淘宝、Walmart 和 Wayfair 三个独立爬虫放在同一个目录中，并提供统一的选择入口。平台抓取逻辑仍然相互独立；统一启动器只负责选择平台、检查目录和启动原有入口。
+本仓库把淘宝、Walmart、Wayfair 和 Reddit 四个独立爬虫放在同一个目录中，并提供统一的选择入口。平台抓取逻辑仍然相互独立；统一启动器只负责选择平台、检查目录和启动原有入口。
 
 ## 快速开始（Windows）
 
@@ -18,6 +18,10 @@ py -3 -m venv walmart\.venv
 # Wayfair
 py -3 -m venv wayfair\.venv
 .\wayfair\.venv\Scripts\python.exe -m pip install -r wayfair\requirements.txt -r wayfair\requirements_http.txt
+
+# Reddit（可使用 Reddit 自己的环境，也可复用根目录 .venv）
+py -3 -m venv reddit\.venv
+.\reddit\.venv\Scripts\python.exe -m pip install -r reddit\requirements.txt
 ```
 
 双击 [`start_scraper.bat`](start_scraper.bat) 可打开交互式菜单，也可以直接运行：
@@ -26,6 +30,7 @@ py -3 -m venv wayfair\.venv
 .\.venv\Scripts\python.exe unified_scraper.py --platform taobao
 .\.venv\Scripts\python.exe unified_scraper.py --platform walmart
 .\.venv\Scripts\python.exe unified_scraper.py --platform wayfair
+.\.venv\Scripts\python.exe unified_scraper.py --platform reddit
 
 # 仅检查目录、入口和运行时，不联网、不启动爬虫
 .\.venv\Scripts\python.exe unified_scraper.py --platform taobao --dry-run
@@ -37,15 +42,17 @@ py -3 -m venv wayfair\.venv
 .\.venv\Scripts\python.exe unified_scraper.py --platform taobao --taobao-dir D:\work\taobao
 .\.venv\Scripts\python.exe unified_scraper.py --platform walmart --walmart-dir D:\work\walmart
 .\.venv\Scripts\python.exe unified_scraper.py --platform wayfair --wayfair-dir D:\work\wayfair
+.\.venv\Scripts\python.exe unified_scraper.py --platform reddit --reddit-dir D:\work\reddit
 ```
 
-也可以设置 `TAOBAO_SCRAPER_DIR`、`WALMART_SCRAPER_DIR`、`WAYFAIR_SCRAPER_DIR` 环境变量；命令行参数优先于环境变量。淘宝运行时还可用 `--taobao-python` 指定 Python，Wayfair BAT 可用 `--cmd-exe` 指定 `cmd.exe`。
+也可以设置 `TAOBAO_SCRAPER_DIR`、`WALMART_SCRAPER_DIR`、`WAYFAIR_SCRAPER_DIR`、`REDDIT_SCRAPER_DIR` 环境变量；命令行参数优先于环境变量。淘宝运行时还可用 `--taobao-python` 指定 Python，Reddit 还可用 `--reddit-python` 指定 Python，Wayfair BAT 可用 `--cmd-exe` 指定 `cmd.exe`。
 
 ## 浏览器和登录前提
 
 - 淘宝：首次运行前启动带远程调试端口 9222 的 Chrome，并在该浏览器中登录淘宝。登录态会保存到本地运行时目录；登录态失效时需要重新登录。
 - Walmart：先打开目标 AdsPower profile，并在同一 profile 中打开 `walmart.com` 标签页；V9 默认还会读取已登录 Sorftime 扩展的 token，通过 HTTP 获取预计月销量/预计月销售额。可用 `--no-sorftime` 关闭，或用 `--sorftime-mode browser` 强制旧的浏览器 DOM 模式。程序只读取已打开浏览器的登录态，不绕过 CAPTCHA 或人工验证。
 - Wayfair：商品列表模式默认走 HTTP；评论或浏览器回退模式需要正常的 Chrome 会话和本地 Cookie 文件。Cookie 文件只在本机使用，不能提交到仓库。
+- Reddit：提供帖子详情+评论树和关键词搜索两种模式。运行前请在 AdsPower/SunBrowser 中打开并登录 Reddit；程序从当前浏览器会话读取 Cookie/CSRF，仅保存在内存，不写入 Excel 或断点文件。遇到 403/429/503 或验证页会安全停止并保留断点，不绕过 CAPTCHA 或人工验证。
 
 请遵守目标网站的服务条款、访问频率限制和适用法律法规。
 
@@ -72,9 +79,15 @@ taobao/
   taobao_scraper.py      # 淘宝兼容启动入口
   taobao_scraper/        # 淘宝源码包
   启动淘宝抓取.bat
+reddit/
+  app.py                 # Reddit 兼容启动入口
+  reddit_scraper/        # 帖子、评论、搜索和媒体抓取源码
+  config/settings.json   # 安全默认配置
+  input/*.txt            # 仅保留安全示例输入
+  start.bat              # ASCII-only Reddit 入口
 ```
 
-各平台的 `runtime`、`taobao_runtime`、输出目录、结果文件、原始 HTML/JSON、断点、Cookie、登录态、浏览器 session、虚拟环境、缓存和生成的 `egg-info` 均被 `.gitignore` 排除。仓库不包含任何实际账号、密码、Token、Cookie 或其他认证状态；请勿把这些内容手动加入提交。
+各平台的 `runtime`、`taobao_runtime`、输出目录、结果文件、原始 HTML/JSON、断点、Cookie、登录态、浏览器 session、虚拟环境、缓存和生成的 `egg-info` 均被 `.gitignore` 排除。Reddit 的 `input/` 默认忽略新增文件，只保留 `keywords.txt`、`urls.txt` 两个无账号示例；请勿把真实 URL 列表、账号信息或运行产物加入提交。仓库不包含任何实际账号、密码、Token、Cookie 或其他认证状态；请勿把这些内容手动加入提交。
 
 ## 测试
 
@@ -82,5 +95,6 @@ taobao/
 
 ```powershell
 py -3 -m unittest discover -s tests -v
-py -3 -m compileall -q unified_scraper.py walmart\run.py walmart\src taobao\taobao_scraper wayfair\wayfair_http_scraper.py wayfair\embed_wayfair_images.py
+py -3 -m compileall -q unified_scraper.py walmart\run.py walmart\src taobao\taobao_scraper wayfair\wayfair_http_scraper.py wayfair\embed_wayfair_images.py reddit\app.py reddit\reddit_scraper
+py -3 -m unittest discover -s reddit\tests -v
 ```
