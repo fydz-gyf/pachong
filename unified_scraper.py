@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""四个平台爬虫的统一启动器。
+"""五个平台爬虫的统一启动器。
 
 这个模块只负责选择平台、做启动前检查并启动已有入口，不复制任何平台的
 抓取逻辑。平台自己的交互式参数输入和输出目录仍由各自项目负责。
@@ -12,6 +12,7 @@
     python unified_scraper.py --platform walmart --dry-run
     python unified_scraper.py --platform wayfair
     python unified_scraper.py --platform reddit --dry-run
+    python unified_scraper.py --platform tiktok --dry-run
 """
 
 from __future__ import annotations
@@ -26,12 +27,13 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 
-PLATFORMS = ("taobao", "walmart", "wayfair", "reddit")
+PLATFORMS = ("taobao", "walmart", "wayfair", "reddit", "tiktok")
 PLATFORM_LABELS = {
     "taobao": "淘宝",
     "walmart": "Walmart",
     "wayfair": "Wayfair",
     "reddit": "Reddit",
+    "tiktok": "TikTok",
 }
 PLATFORM_ALIASES = {
     "1": "taobao",
@@ -47,6 +49,10 @@ PLATFORM_ALIASES = {
     "4": "reddit",
     "reddit": "reddit",
     "rd": "reddit",
+    "5": "tiktok",
+    "tiktok": "tiktok",
+    "tt": "tiktok",
+    "抖音": "tiktok",
     "退出": None,
     "exit": None,
     "quit": None,
@@ -61,14 +67,15 @@ class LauncherError(RuntimeError):
 
 @dataclass(frozen=True)
 class ProjectPaths:
-    """四个平台项目的根目录。目录可通过命令行或环境变量覆盖。"""
+    """五个平台项目的根目录。目录可通过命令行或环境变量覆盖。"""
 
     taobao: Path
     walmart: Path
     wayfair: Path
     # Optional keeps construction compatible with callers that only need the
-    # original three platforms; load_project_paths always fills it in.
+    # original four platforms; load_project_paths always fills it in.
     reddit: Path | None = None
+    tiktok: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -93,7 +100,7 @@ def normalize_platform(value: str) -> str | None:
     key = str(value or "").strip().lower()
     if key not in PLATFORM_ALIASES:
         raise ValueError(
-            f"不支持的平台：{value!r}。请选择 taobao、walmart、wayfair、reddit 或 0。"
+            f"不支持的平台：{value!r}。请选择 taobao、walmart、wayfair、reddit、tiktok 或 0。"
         )
     return PLATFORM_ALIASES[key]
 
@@ -111,12 +118,13 @@ def choose_platform(
     output_fn("  2. Walmart")
     output_fn("  3. Wayfair")
     output_fn("  4. Reddit")
+    output_fn("  5. TikTok")
     output_fn("  0. 退出")
     output_fn("=" * 64)
 
     while True:
         try:
-            raw = input_fn("请输入选项 [1-4/0]: ")
+            raw = input_fn("请输入选项 [1-5/0]: ")
         except EOFError as exc:
             raise LauncherError("无法读取平台选择，请在可交互的命令窗口中重新运行。") from exc
         except KeyboardInterrupt as exc:
@@ -148,14 +156,15 @@ def load_project_paths(
     walmart_dir: str | Path | None = None,
     wayfair_dir: str | Path | None = None,
     reddit_dir: str | Path | None = None,
+    tiktok_dir: str | Path | None = None,
     environ: Mapping[str, str] | None = None,
     launcher_dir: Path | None = None,
 ) -> ProjectPaths:
     """读取默认目录及可选覆盖项。
 
     环境变量名称分别为 ``TAOBAO_SCRAPER_DIR``、
-    ``WALMART_SCRAPER_DIR``、``WAYFAIR_SCRAPER_DIR`` 和
-    ``REDDIT_SCRAPER_DIR``。
+    ``WALMART_SCRAPER_DIR``、``WAYFAIR_SCRAPER_DIR``、
+    ``REDDIT_SCRAPER_DIR`` 和 ``TIKTOK_SCRAPER_DIR``。
     """
 
     env = os.environ if environ is None else environ
@@ -175,6 +184,12 @@ def load_project_paths(
             reddit_dir,
             "REDDIT_SCRAPER_DIR",
             root / "reddit",
+            env,
+        ),
+        tiktok=_path_value(
+            tiktok_dir,
+            "TIKTOK_SCRAPER_DIR",
+            root / "tiktok",
             env,
         ),
     )
@@ -235,12 +250,38 @@ def _reddit_python(
     return Path(sys.executable)
 
 
+def _tiktok_python(
+    project_dir: Path,
+    repository_root: Path | None = None,
+) -> Path:
+    """Prefer TikTok's local venv, then the monorepo root venv.
+
+    TikTok's collector only needs the shared Python dependencies and can
+    auto-detect the active AdsPower page itself, so a direct Python launch is
+    portable across clean checkouts without requiring the source BAT's machine
+    paths.
+    """
+
+    repository_root = repository_root or Path(__file__).resolve().parent
+    venv_candidates = (
+        project_dir / ".venv" / "Scripts" / "python.exe",
+        project_dir / ".venv" / "bin" / "python",
+        repository_root / ".venv" / "Scripts" / "python.exe",
+        repository_root / ".venv" / "bin" / "python",
+    )
+    for candidate in venv_candidates:
+        if candidate.is_file():
+            return candidate
+    return Path(sys.executable)
+
+
 def build_launch_plan(
     platform: str,
     paths: ProjectPaths | None = None,
     *,
     python_executable: str | Path | None = None,
     reddit_python_executable: str | Path | None = None,
+    tiktok_python_executable: str | Path | None = None,
     command_interpreter: str | Path | None = None,
 ) -> LaunchPlan:
     """构造一个平台的命令和工作目录，不执行命令。"""
@@ -275,7 +316,7 @@ def build_launch_plan(
             "/c",
             f'call "{entrypoint}"',
         )
-    else:
+    elif normalized == "reddit":
         project_dir = project_paths.reddit or (
             Path(__file__).resolve().parent / "reddit"
         )
@@ -283,6 +324,29 @@ def build_launch_plan(
         # Keep Reddit's runtime override separate from the Taobao-only option.
         runtime = Path(reddit_python_executable or _reddit_python(project_dir))
         command = (str(runtime), str(entrypoint))
+    else:
+        project_dir = project_paths.tiktok or (
+            Path(__file__).resolve().parent / "tiktok"
+        )
+        entrypoint = project_dir / "tiktok_collector.py"
+        # The collector's find_profile() can discover an active AdsPower
+        # TikTok page without a supplied debug port. Keep the defaults used by
+        # the portable TikTok BAT while launching Python directly so the
+        # unified launcher remains testable and path-portable.
+        runtime = Path(tiktok_python_executable or _tiktok_python(project_dir))
+        command = (
+            str(runtime),
+            str(entrypoint),
+            "--keywords",
+            str(project_dir / "keywords.txt"),
+            "--max-videos",
+            "10",
+            "--search-scrolls",
+            "20",
+            "--comment-scrolls",
+            "80",
+            "--expand-replies",
+        )
 
     return LaunchPlan(
         platform=normalized,
@@ -363,12 +427,12 @@ def execute_plan(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="unified_scraper",
-        description="选择并启动淘宝、Walmart、Wayfair 或 Reddit 的现有爬虫入口。",
+        description="选择并启动淘宝、Walmart、Wayfair、Reddit 或 TikTok 的现有爬虫入口。",
     )
     parser.add_argument(
         "--platform",
         type=_platform_arg,
-        metavar="{taobao,walmart,wayfair,reddit}",
+        metavar="{taobao,walmart,wayfair,reddit,tiktok}",
         help="直接选择平台；省略时显示交互式菜单。",
     )
     parser.add_argument(
@@ -390,12 +454,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reddit 项目目录（默认：仓库根目录/reddit）。",
     )
     parser.add_argument(
+        "--tiktok-dir",
+        help="TikTok 项目目录（默认：仓库根目录/tiktok）。",
+    )
+    parser.add_argument(
         "--taobao-python",
         help="淘宝使用的 Python 可执行文件（默认：当前启动器 Python）。",
     )
     parser.add_argument(
         "--reddit-python",
         help="Reddit 使用的 Python 可执行文件（默认：Reddit 或仓库根目录虚拟环境，否则当前 Python）。",
+    )
+    parser.add_argument(
+        "--tiktok-python",
+        help="TikTok 使用的 Python 可执行文件（默认：TikTok 或仓库根目录虚拟环境，否则当前 Python）。",
     )
     parser.add_argument(
         "--cmd-exe",
@@ -440,12 +512,14 @@ def main(
         walmart_dir=args.walmart_dir,
         wayfair_dir=args.wayfair_dir,
         reddit_dir=args.reddit_dir,
+        tiktok_dir=args.tiktok_dir,
     )
     plan = build_launch_plan(
         platform,
         paths,
         python_executable=args.taobao_python,
         reddit_python_executable=args.reddit_python,
+        tiktok_python_executable=args.tiktok_python,
         command_interpreter=args.cmd_exe,
     )
 

@@ -48,6 +48,15 @@ pip-wheel-metadata/
 **/session/
 **/sessions/
 
+# TikTok local captures and operator input. The tracked keywords.txt is only a
+# safe sample; keep private keyword lists and all captured data out of Git.
+tiktok/data/
+tiktok/capture_data/
+tiktok/keywords*.txt
+!tiktok/keywords.txt
+tiktok/*capture*.json
+tiktok/*capture*.jsonl
+
 # Reddit input is local operator data; only the two safe sample files are tracked.
 reddit/input/*
 !reddit/input/keywords.txt
